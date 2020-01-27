@@ -25,7 +25,7 @@ if [ ! -z "${VRSE_PATH}" ]; then
                 case ${db_type} in
 
                     dbm)
-                        echo "MySQL compute instances in project ${project}" >&2
+                        echo "Identifying MySQL compute instances in project ${project}" >&2
 
                         for instance in $(gcloud --project=${project} compute instances list | egrep '\-db\-|\-dbm\-' | egrep -i "running" | awk '{print $1}' | sort -u | egrep -v '\-proxy\-') ; do
                             echo "${instance}"
@@ -34,7 +34,7 @@ if [ ! -z "${VRSE_PATH}" ]; then
                     ;;
 
                     dbv)
-                        echo "Vertica compute instances in project ${project}" >&2
+                        echo "Identifying Vertica compute instances in project ${project}" >&2
 
                         for instance in $(gcloud --project=${project} compute instances list | egrep '\-dbv\-' | egrep -i "running" | awk '{print $1}' | sort -u) ; do
                             echo "${instance}"
@@ -44,7 +44,7 @@ if [ ! -z "${VRSE_PATH}" ]; then
 
 
                     gdbm)
-                        echo "CloudSQL instances in project ${project}" >&2
+                        echo "Identifying CloudSQL instances in project ${project}" >&2
 
                         for instance in $(gcloud --project=${project} sql instances list | awk '{print $1}' | egrep -v "^NAME" | sort -u) ; do
                             echo "${instance}"
