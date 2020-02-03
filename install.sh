@@ -53,3 +53,16 @@ if [ ! -e "${HOME}/.my.cnf" ]; then
     chmod 600 "${HOME}/.my.cnf"
 fi
 
+# Seed ${HOME}/.bashrc for MySQL PS1 prompt if absent
+if [ ! -e "${HOME}/.bashrc" ]; then
+    echo "Creating a default ~/.bashrc ... NOTE: it is not properly configured on purpose!"
+    touch "${HOME}/.bashrc"
+fi
+
+let mysql_ps1_check=$(egrep -c "\bMYSQL_PS1\b" "${HOME}/.bashrc" 2> /dev/null)
+
+if [ ${mysql_ps1_check} -eq 0 ]; then
+    echo "Adding MYSQL_PS1 variable to ~/.bashrc"
+    awk '{print $0}' bashrc "${HOME}/.bashrc"
+fi
+
