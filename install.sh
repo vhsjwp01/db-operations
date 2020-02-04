@@ -36,7 +36,7 @@ for component in *db*.sh no_api_access ; do
 done
 
 # Create symbolic links to enable db_ops.sh functionality
-for basename_alias in $(egrep ")$" db_ops.sh | egrep -v '=' | awk '{print $1}' | sed -e 's|)$||g') ; do
+for basename_alias in $(egrep "\)$" db_ops.sh | egrep -v '=' | awk '{print $1}' | sed -e 's|)$||g') ; do
 
     if [ ! -L "${HOME}/bin/${basename_alias}" ]; then
         echo "Creating symlink for ${basename_alias} in '${HOME}/bin'"
