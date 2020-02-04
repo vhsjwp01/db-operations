@@ -63,6 +63,6 @@ let mysql_ps1_check=$(egrep -c "\bMYSQL_PS1\b" "${HOME}/.bashrc" 2> /dev/null)
 
 if [ ${mysql_ps1_check} -eq 0 ]; then
     echo "Adding MYSQL_PS1 variable to ~/.bashrc"
-    awk '{print $0}' bashrc "${HOME}/.bashrc"
+    awk '{print $0}' bashrc >> "${HOME}/.bashrc"
 fi
 
