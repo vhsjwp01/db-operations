@@ -11,6 +11,15 @@ if [ ! -z "${user_list}" ]; then
 
     case ${my_basename} in
 
+        show_dbv_users)
+            this_vsql="/opt/vertica/bin/vsql"
+            this_db="${1}"
+            this_db_username="dbadmin"
+            this_db_password_file="/home/dbadmin/.db_passwords/${this_db_username}_${this_db}"
+            
+            echo "\\du" | ${this_vsql} ${this_db} ${this_db_username} -w $(sudo awk '/^dbPassword/ {print $NF}' ${this_db_password_file})
+        ;;
+
         show_users)
             echo "use mysql ; select user,host from user ;" | mysql | awk '{print $1 ":" $2}' | egrep -v "^:$" | egrep -iv "^user:host$"
         ;;
@@ -38,21 +47,6 @@ if [ ! -z "${user_list}" ]; then
                     fi
 
                     echo
-                done
-
-            done
-
-        ;;
-
-        drop_users)
-
-            for user in ${user_list} ; do
-
-                for user_entry in $("${my_dirname}/find_users" ${user}) ; do
-                    this_user=$(echo "${user_entry}" | awk -F':' '{print $1}')
-                    this_host=$(echo "${user_entry}" | awk -F':' '{print $2}')
-
-                    echo "use mysql ; drop user '${this_user}'@'${this_host}' ;" | mysql
                 done
 
             done
