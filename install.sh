@@ -8,7 +8,7 @@ if [ ! -d "${HOME}/bin" ]; then
 fi
 
 # Copy any *db*.sh script into ${HOME}/bin
-for component in *db*.sh no_api_access ; do
+for component in *cloudsql*.sh *db*.sh no_api_access ; do
     install_component="no"
 
     if [ -e "${HOME}/bin/${component}" ]; then
