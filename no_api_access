@@ -1,2 +1,4 @@
-# place here the names of GCP projects for which API access is disabled
-# one project per line
+# place here the tuple of <databsse_type>:<GCP project> for which API access is disabled
+# one entry per line
+# Example:
+# dbm:vst-main-qa

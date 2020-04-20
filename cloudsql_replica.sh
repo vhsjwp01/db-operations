@@ -10,23 +10,81 @@ ERROR=1
 
 let exit_code=${SUCCESS}
 
+supported_cloud_db_providers="AWS:RDS:Relational_Database_Service  \
+                              Azure:ASQLDB:Azure_SQL_Database      \
+                              Google_Cloud_Platform:CSQL:Cloud_SQL"
+x_wing_fighter=":=8o8=:"
+
 # This function shows what has been entered so far at each stage
 function supplied_data() {
     let return_code=${SUCCESS}
 
+    ####
+    # ORDER OF EVENTS
+    #
+    # 1) Establish remote DB provider, credentials, replication settings, and then choose DB
+    #    - set SRN from provided values
+    # 2) Establish GCP project and zone, bucket access, SRN uniqueness, CloudSQL instance name uniqueness
+    #    - set region from zone
+    #    - set MySQL dump file name from provided info
+    # 3) Perform MySQL dump to bucket
+    # 4) Create SRN and Instance
+
     echo "==============" >&2
     echo "Supplied Data:" >&2
+    echo >&2
+
+    echo "  -------------------------" >&2
+    echo "  * REMOTE DB INFORMATION *" >&2
+    echo "  -------------------------" >&2
+
+    echo "  Donor Cloud DB Type: ${my_donor_cloud_db_provider}"  >&2
+    echo "  Source Host IP Address: ${my_valid_source_host_ip}"            >&2
+    echo "  Source Host Port: ${my_valid_source_host_port}"                >&2
+
+    # Remote DB admin user creds
+    echo "  Source Host Admin Username: ${my_source_admin_username}" >&2
+    echo -ne "  Source Host Admin Password set: "                    >&2
+
+    if [ ! -z "${my_source_admin_password}" ]; then
+        echo "YES" >&2
+    else
+        echo "NO" >&2
+    fi
+
+    # Remote DB replication user creds
+    echo "  Source Host Replication Username: ${my_source_replication_username}" >&2
+    echo -ne "  Source Host Replication Password set: "                          >&2
+
+    if [ ! -z "${my_source_replication_password}" ]; then
+        echo "YES" >&2
+    else
+        echo "NO" >&2
+    fi
+
+
+
+
+###
+    echo "  -------------------------" >&2
+    echo "  *    GCP INFORMATION    *" >&2
+    echo "  -------------------------" >&2
     echo "  GCP Project: ${my_gcp_project}" >&2
     echo "  GCP Instance Zone: ${my_instance_zone}" >&2
     echo "  GCP Instance Region: ${my_instance_region}" >&2
     echo "  CloudSQL Instance Name: ${my_instance_name}" >&2
     echo "  CloudSQL SRN: ${my_instance_srn}" >&2
     echo "  CloudSQL MySQL Version: ${my_mysql_version}" >&2
-    echo "  Source Host IP Address: ${my_source_host_ip}" >&2
-    echo "  Source Host Port: ${my_source_host_port}" >&2
-    echo "  Source Host Username: ${my_source_username}" >&2
-    echo "  MySQL Dump Storage Bucket: gs://${my_storage_bucket}" >&2
+
+
+    if [ -z "${my_storage_bucket}" ]; then
+        echo "  MySQL Dump Storage Bucket: " >&2
+    else
+        echo "  MySQL Dump Storage Bucket: gs://${my_storage_bucket}" >&2
+    fi
+
     echo "  MySQL Dump Filename: ${my_dumpfile_name}" >&2
+
     echo "  CloudSQL Machine Type: ${my_machine_type}" >&2
     echo "  CloudSQL Storage Size: ${my_storage_size}" >&2
     echo "==============" >&2
@@ -37,50 +95,298 @@ function supplied_data() {
     return ${return_code}
 }
 
-# This function provides the stage choreography
+# This function provides the choreography
 function main() {
     let return_code=${SUCCESS}
-    
-    clear
-    my_gcp_project=$(valid_gcp_project)                                                         &&
-    my_project_initials=$(echo "${my_gcp_project}" | sed -e 's|-| |g' -e 's/\(.\)[^ ]* */\1/g') &&
 
     clear
-    my_instance_zone=$(valid_gcp_zone ${my_gcp_project})             &&
-    my_instance_region=$(echo "${my_instance_zone}" | sed 's/..$//') &&
+    echo "*** THIS WIZARD WILL ATTEMPT TO ACCESS A REMOTE CLOUD PROVIDER DATABASE FOR   ***"
+    echo "*** THE PURPOSE OF CREATING A GOOGLE CLOUD SQL REPLICA.  TO DO SO REQUIRES    ***"
+    echo "*** GOOGLE STORAGE BUCKET ACCESS.  PLEASE INVOKE THIS WIZARD USING AN ACCOUNT ***"
+    echo "*** THAT HAS RESOURCE CREATION PRIVILEGES IN THE SPECIFIED GOOGLE PROJECT     ***"
+    echo
+    echo
 
-    clear
-    my_instance_name=$(valid_sql_name "${my_gcp_project}")                &&
-    my_instance_srn=$(echo "${my_instance_name}" | sed -e 's|\(-gdbm-\)|-srn\1|g') &&
+    # This section collects information about accessing the remote DB to be replicated
+    # this variable forms the first part of the SRN
 
-    clear
-    my_mysql_version=$(valid_mysql_version) &&
+    for function in db_cloud_origin valid_source_host_ip valid_source_host_port ; do
+        clear
+        eval "my_${function}=\$(${function})"
+        let return_code+=${?}
+    done
 
-    clear
-    my_source_host_ip=$(valid_source_host_ip) &&
+    # Test the information gathered above
+    if [ ${return_code} -eq ${SUCCESS} ]; then
+        test_db_host_and_port "${my_valid_source_host_ip}" "${my_valid_source_host_port}"
+        let return_code+=${?}
+    fi
 
-    clear
-    my_source_host_port=$(valid_source_host_port)                                                             &&
-    echo "helo" | socat - TCP4:${my_source_host_ip}:${my_source_host_port},connect-timeout=2 > /dev/null 2>&1 &&
 
-    clear
-    my_source_username=$(remote_db_credentials) &&
+    # Gather source db replication creds
+    if [ ${return_code} -eq ${SUCCESS} ]; then
+        clear                                                                                                                   &&
+        my_source_replication_credentials=$(remote_db_credentials replication)                                                  &&
+        let return_code+=${?}
 
-    clear
-    my_storage_bucket=$(valid_gcs_bucket) &&
+        if [ ${return_code} -eq ${SUCCESS} ]; then
+            my_source_replication_username=$(echo "${my_source_replication_credentials}" | awk -F"${x_wiong_fighter}" '{print $1}') &&
+            my_source_replication_pssword=$(echo "${my_source_replication_credentials}" | awk -F"${x_wing_fighter}" '{print $2}')   &&
 
-    clear
-    my_dumpfile_name="${my_instance_name}.$(date +%Y%m%d).sql"
+            if [ -z "${my_source_replication_username}" -o -z "${my_source_replication_pssword}" ]; then
+                let return_code=${ERROR}
+            fi
 
-    clear
-    my_machine_type=$(valid_instance_tier) &&
+        fi
 
-    clear
-    my_storage_size=$(valid_disk_size) &&
+    fi
 
-    clear
+    # Test the replication credentials for the appropriate GRANT
+    if [ ${return_code} -eq ${SUCCESS} ]; then
+        let replication_user_works=$(check_replication_user_grant)
+
+        if [ ${replication_user_works} -eq 0 ]; then
+            echo "Could not confirm that replication user '${my_source_replication_username}' has 'REPLICATION SLAVE' GRANT on '${my_valid_source_host_ip}:${my_valid_source_host_port}'"
+            let return_code=${ERROR}
+        fi
+
+    fi
+
+    # Gather source db admin creds
+    if [ ${return_code} -eq ${SUCCESS} ]; then
+        clear                                                                                                       &&
+        my_source_admin_credentials=$(remote_db_credentials admin)                                                  &&
+        let return_code+=${?}
+
+        if [ ${return_code} -eq ${SUCCESS} ]; then
+            my_source_admin_username=$(echo "${my_source_admin_credentials}" | awk -F"${x_wiong_fighter}" '{print $1}') &&
+            my_source_admin_pssword=$(echo "${my_source_admin_credentials}" | awk -F"${x_wing_fighter}" '{print $2}')   &&
+
+            if [ -z "${my_source_admin_username}" -o -z "${my_source_admin_pssword}" ]; then
+                let return_code=${ERROR}
+            fi
+
+        fi
+
+    fi
+
+#    # Use the admin credentials to get a list of databases
+#    my_databases_to_dump=$(remote_databases)
+#
+#    exit
+# 
+#    # This section collects information about the GCP project where the replica will be created
+#    clear                                                                                       &&
+#    my_gcp_project=$(valid_gcp_project)                                                         &&
+#    my_project_initials=$(echo "${my_gcp_project}" | sed -e 's|-| |g' -e 's/\(.\)[^ ]* */\1/g') &&
+#
+#    clear                                                            &&
+#    my_instance_zone=$(valid_gcp_zone ${my_gcp_project})             &&
+#    my_instance_region=$(echo "${my_instance_zone}" | sed 's/..$//') &&
+#
+#    clear                                                                 &&
+#    my_instance_name=$(valid_sql_name "${my_gcp_project}")                &&
+####    my_instance_srn=$(echo "${my_instance_name}" | sed -e 's|\(-gdbm-\)|-srn\1|g') &&
+#
+#    clear                                   &&
+#    my_mysql_version=$(valid_mysql_version) &&
+#
+#    clear                                 &&
+#    my_storage_bucket=$(valid_gcs_bucket) &&
+#
+#    clear                                                      &&
+#    my_dumpfile_name="${my_instance_name}.$(date +%Y%m%d).sql" &&
+#
+#    clear                                  &&
+#    my_machine_type=$(valid_instance_tier) &&
+#
+#    clear                              &&
+#    my_storage_size=$(valid_disk_size) &&
+#
+#    clear         &&
     echo_commands
     return ${?}
+}
+
+function test_db_host_and_port() {
+    let return_code=${SUCCESS}
+
+    local this_source_host="${1}"
+    local this_source_host_port="${2}"
+
+    if [ ! -z "${this_source_host}" -a ! -z "${this_source_host_port}" ]; then
+        echo "helo" | socat - TCP4:${this_source_host_ip}:${this_source_host_port},connect-timeout=2 > /dev/null 2>&1
+    else
+        false
+    fi
+
+    let return_code=${?}
+
+    return ${return_code}
+}
+
+function remote_databases() {
+    let return_code=${SUCCESS}
+
+    local this_mysql_client=$(unalias mysql > /dev/null 2>&1 ; which mysql 2> /dev/null)
+
+    if [ ! -z "${this_mysql_client}" ]; then
+        local remote_dbs=$(${this_mysql_client} -h ${my_valid_source_host_ip} -P ${my_valid_source_host_port} -u ${my_source_admin_username} -p"${my_source_admin_password}" -e "show databases;" 2> /dev/null | egrep -v "^Database$")
+        local these_remote_dbs=(${remote_dbs})
+
+        if [ ! -z "${remote_dbs}" ]; then
+            local element_counter=""
+            local array_index_list=""
+            local this_array_index_list=""
+            local max_element=""
+            let max_element=${#these_remote_dbs[@]}-1
+            local all_finished="no"
+
+            while [ "${all_finished}" = "no" -a ! -z "${this_array_index_list}" ]; do
+                supplied_data
+                echo "Remote databases on '${my_valid_source_host_ip}:${my_valid_source_host_port}':" >&2
+                echo >&2
+
+                let element_counter=0
+
+                for element in ${these_remote_dbs[@]} ; do
+                    echo "  [${element_counter}] ${element}" >&2
+                    let element_counter+=1
+                done
+
+                echo >&2
+                echo "Your selections: ${this_array_index_list}" >&2
+                echo "(enter 'clear' to start over)" >&2
+                echo "Enter the number(s) (separated by comma) corresponding to the remote database(s) of choice" >&2
+                read -p "Enter 'done' after all selections have been made: " array_index
+
+                case "${array_index}" in
+
+                    clear)
+                        this_array_index_list=""
+                    ;;
+
+                    done)
+                        all_finished="yes"
+                    ;;
+
+                    *)
+                        array_index=$(echo "${array_index}" | egrep -v "[^0-9,]")
+                            
+                        if [ -z "${array_index}" ]; then
+                            array_index="invalid"
+                        else
+
+                            for array_index_element in $(echo "${array_index}" | sed -e 's|,| |g') ; do
+
+                                if [ ${array_index_element} -lt 0 -o ${array_index_element} -gt ${max_element} ]; then
+                                    echo "Selection '${array_index_element}' is out of range and will be ignored" >&2
+                                else
+                                    this_array_index_list+=" ${these_remote_dbs[$array_index_element]}"
+                                fi
+
+                            done
+
+                        fi
+
+                        if [ "${array_index}" = "invalid" ]; then
+                            echo "Invalid choice" >&2
+                            sleep 3
+                        fi
+
+                    ;;
+
+                esac
+
+            done 
+
+        else
+            echo "Failed to return a list of remote databases on '${my_valid_source_host_ip}:${my_valid_source_host_port}'" >&2
+            let return_code=${ERROR}
+            exit
+        fi
+
+    else
+        echo 0
+        let return_code=${ERROR}
+    fi
+
+    return ${return_code}
+}
+
+# Check replication grant
+function check_replication_user_grant() {
+    let return_code=${SUCCESS}
+
+    local this_mysql_client=$(unalias mysql > /dev/null 2>&1 ; which mysql 2> /dev/null)
+
+    if [ ! -z "${this_mysql_client}" ]; then
+        ${this_mysql_client} -h ${my_valid_source_host_ip} -P ${my_valid_source_host_port} -u ${my_source_replication_username} -p"${my_source_replication_password}" -e "show grants;" 2> /dev/null | egrep -ci "^GRANT .*\bREPLICATION SLAVE\b"
+    else
+        echo 0
+        let return_code=${ERROR}
+    fi
+
+    return ${return_code}
+}
+
+# Identify something about the remote DB provider
+function db_cloud_origin() {
+    let return_code=${SUCCESS}
+
+    local these_supported_cloud_db_providers=(${supported_cloud_db_providers})
+    local max_element=""
+    let max_element=${#these_supported_cloud_db_providers[@]}-1
+
+    local array_index=""
+    local element_counter=""
+    local this_cloud_db_prefix=""
+
+    local this_provider=""
+    local this_provider_db=""
+    local this_provider_db_description=""
+
+    while [ -z "${this_cloud_db_prefix}" ]; do
+        supplied_data
+        echo "Supported Cloud DB providers are as follows:" >&2
+        echo >&2
+
+        let element_counter=0
+
+        for element in ${these_supported_cloud_db_providers[@]} ; do
+            this_provider=$(echo "${element}" | awk -F':' '{print $1}' | sed -e 's|_| |g')
+            this_provider_db=$(echo "${element}" | awk -F':' '{print $2}')
+            this_provider_db_description=$(echo "${element}" | awk -F':' '{print $3}' | sed -e 's|_| |g')
+            echo "  [${element_counter}] ${this_provider} - ${this_provider_db_description}" >&2
+            let element_counter+=1
+        done
+
+        echo >&2
+        read -p "Enter the number corresponding to the Source Cloud DB provider of choice: " array_index
+
+        array_index=$(echo "${array_index}" | egrep -v "[^0-9]")
+            
+        if [ -z "${array_index}" ]; then
+            let array_index=${max_element}+1
+        fi
+
+        if [ ${array_index} -lt 0 -o ${array_index} -gt ${max_element} ]; then
+            echo "Invalid choice" >&2
+            sleep 3
+        else
+            this_cloud_db_prefix=$(echo "${these_supported_cloud_db_providers[$array_index]}" | awk -F':' '{print $2}' | tr '[A-Z]' '[a-z]')
+        fi
+
+    done 
+
+    echo "${this_cloud_db_prefix}"
+    return ${return_code}
+}
+
+function db_srn() {
+    let return_code=${SUCCESS}
+
+    return ${return_code}
 }
 
 # This function checks that the GCP project provided is valid
@@ -134,15 +440,15 @@ function valid_gcp_zone() {
         done
 
         # Build a list of choices
+        local array_index=""
+        local element_counter=""
+        local next_element_counter=""
         local this_zone=""
 
         while [ -z "${this_zone}" ]; do
             supplied_data
             echo "Valid GCP zones are as follows: " >&2
             echo >&2
-
-            local element_counter=""
-            local next_element_counter=""
 
             let element_counter=0
             let next_element_counter=0
@@ -206,7 +512,7 @@ function valid_gcp_zone() {
     return ${return_code}
 }
 
-# This function makes sure that the CloudSQL SRN/Instance name provided is 
+# This function makes sure that the CloudSQL Instance name provided is 
 # unique and matches a modicum of VST naming requirements
 function valid_sql_name() {
     let return_code=${SUCCESS}
@@ -270,6 +576,8 @@ function valid_mysql_version() {
     local max_element=""
     let max_element=${#mysql_version_array[@]}-1
 
+    local array_index=""
+    local element_counter=""
     local this_mysql_version=""
 
     while [ -z "${this_mysql_version}" ]; do
@@ -277,7 +585,6 @@ function valid_mysql_version() {
         echo "Valid versions of MySQL are as follows:" >&2
         echo >&2
 
-        local element_counter=""
         let element_counter=0
 
         for element in ${mysql_version_array[@]} ; do
@@ -353,7 +660,7 @@ function valid_source_host_port() {
 
     while [ -z "${this_source_host_port}" ]; do
         supplied_data
-        read -p "Enter the Port of the Source Host '${my_source_host_ip}': " this_source_host_port
+        read -p "Enter the Port of the Source Host '${my_valid_source_host_ip}': " this_source_host_port
 
         local port_lower_bound=""
         local port_upper_bound=""
@@ -383,14 +690,50 @@ function valid_source_host_port() {
 function remote_db_credentials() {
     let return_code=${SUCCESS}
 
-    local remote_db_username=""
+    this_mode="${1}"
 
-    while [ -z "${remote_db_username}" ]; do
-        supplied_data
-        read -p "Enter the Remote Database Username for source host '${my_source_host_ip}:${my_source_host_port}': " remote_db_username
-    done
+    case ${this_mode} in
 
-    echo "${remote_db_username}"
+        admin)
+            local remote_db_admin_username=""
+            local remote_db_admin_password=""
+
+            # Get the admin username
+            while [ -z "${remote_db_admin_username}" ]; do
+                supplied_data
+                read -p "Enter the Remote Database Admin Username for source host '${my_valid_source_host_ip}:${my_valid_source_host_port}': " remote_db_admin_username
+            done
+
+            # Get the admin password
+            while [ -z "${remote_db_admin_password}" ]; do
+                supplied_data
+                read -p "Enter the Remote Database Admin Password for source host '${remote_db_admin_username}@${my_valid_source_host_ip}:${my_valid_source_host_port}': " remote_db_admin_password
+            done
+
+            echo "${remote_db_admin_username}${x_wing_fighter}${remote_db_admin_password}"
+        ;;
+
+        replication)
+            local remote_db_replication_username=""
+            local remote_db_replication_password=""
+
+            # Get the replication username
+            while [ -z "${remote_db_replication_username}" ]; do
+                supplied_data
+                read -p "Enter the Remote Database Replication Username for source host '${my_valid_source_host_ip}:${my_valid_source_host_port}': " remote_db_replication_username
+            done
+
+            # Get the replication password
+            while [ -z "${remote_db_replication_password}" ]; do
+                supplied_data
+                read -p "Enter the Remote Database Replication Password for source host '${remote_db_replication_username}@${my_valid_source_host_ip}:${my_valid_source_host_port}': " remote_db_replication_password
+            done
+
+            echo "${remote_db_replication_username}${x_wing_fighter}${remote_db_replication_password}"
+        ;;
+
+    esac
+
     return ${return_code}
 }
 
@@ -421,7 +764,6 @@ function valid_instance_tier() {
     let return_code=${SUCCESS}
 
     local this_machine_type=""
-    local array_index=""
 
     local tier_header="TIER\t\t\t\tRAM\t\tDISK"
     local regional_tiers_list=$(gcloud --project=${my_gcp_project} sql tiers list | egrep "\b${my_instance_region}\b" | awk '{print $1 "--RAM:" $(NF-3) "-" $(NF-2) "--DISK:" $(NF-1) "-" $NF}')
@@ -431,6 +773,7 @@ function valid_instance_tier() {
 
     local max_string_length=""
     let max_string_length=0
+
 
     # Figure out the longest machine type string
     for i in ${regional_tiers_array[@]} ; do
@@ -442,16 +785,18 @@ function valid_instance_tier() {
    
     done
 
+    local array_index=""
+    local element_counter=""
+    local element_padding=""
+    local element_padding_delta=""
+    local index_padding=""
+
     while [ -z "${this_machine_type}" ]; do
         supplied_data
-        local element_counter=""
         let element_counter=0
 
         for element in ${regional_tiers_array[@]} ; do
-            local element_padding=""
-            local element_padding_delta=""
             let element_padding_delta=0
-            local index_padding=""
 
             if [ ${element_counter} -lt 10 ]; then
                 index_padding=" "
@@ -552,15 +897,15 @@ function echo_commands() {
     echo "    --project=${my_gcp_project} \\"
     echo "    --region=${my_instance_region} \\"
     echo "    --database-version=${my_mysql_version} \\"
-    echo "    --source-ip-address=${my_source_host_ip} \\"
-    echo "    --source-port=${my_source_host_port}"
+    echo "    --source-ip-address=${my_valid_source_host_ip} \\"
+    echo "    --source-port=${my_valid_source_host_port}"
     
     # This creates the instance that wiil use the answer file to setup a replica
     echo "gcloud beta sql instances create ${my_instance_name} \\"
     echo "    --project=${my_gcp_project} \\"
     echo "    --zone-${my_instance_zone} \\"
     echo "    --master-instance-name=${my_instance_srn} \\"
-    echo "    --master-username=${my_source_username} \\"
+    echo "    --master-username=${my_source_admin_username} \\"
     echo "    --prompt-for-master-password \\"
     echo "    --master-dump-file-path=gs://${my_storage_bucket}/${my_dumpfile_name} \\"
     echo "    #--master-ca-certificate-path=[SOURCE_SERVER_CA_PATH] \\"
